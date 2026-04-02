@@ -1,6 +1,6 @@
 """
-TikTok Auto Commenter v3.1 — Android App
-Crash-proof edition
+TikTok Auto Commenter v3.2
++ History checker
 """
 
 import os
@@ -11,6 +11,7 @@ import hashlib
 import re
 import threading
 from urllib.parse import quote
+from datetime import datetime
 
 try:
     import requests
@@ -32,10 +33,102 @@ if platform != 'android':
 if platform == 'android':
     try:
         from android.permissions import request_permissions, Permission
-        request_permissions([Permission.INTERNET])
+        request_permissions([Permission.INTERNET, Permission.WRITE_EXTERNAL_STORAGE])
     except Exception:
         pass
 
+
+# ═══════════════════════════════════════
+#  HISTORY SAVER
+# ═══════════════════════════════════════
+
+HISTORY_FILE = 'comment_history.json'
+if platform == 'android':
+    try:
+        HISTORY_FILE = os.path.join(
+            os.environ.get('EXTERNAL_STORAGE', '/sdcard'),
+            'tiktokbot_history.json'
+        )
+    except Exception:
+        pass
+
+
+def load_history():
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+
+def save_history(history):
+    try:
+        with open(HISTORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(history, f, ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+def add_to_history(video_id, comment_text, status, error_msg=''):
+    try:
+        h = load_history()
+        h.append({
+            'time': datetime.now().strftime('%d.%m %H:%M:%S'),
+            'video': video_id,
+            'text': comment_text,
+            'ok': status,
+            'error': error_msg,
+        })
+        # max 500 records
+        if len(h) > 500:
+            h = h[-500:]
+        save_history(h)
+    except Exception:
+        pass
+
+
+def format_history():
+    h = load_history()
+    if not h:
+        return '[color=8899bb]Istoriya pusta[/color]'
+
+    lines = []
+    for item in reversed(h):
+        t = item.get('time', '?')
+        vid = item.get('video', '?')
+        txt = item.get('text', '?')
+        ok = item.get('ok', False)
+        err = item.get('error', '')
+
+        if ok:
+            status = '[color=66dd88]OK[/color]'
+        else:
+            status = '[color=ff6666]' + (err if err else 'FAIL') + '[/color]'
+
+        short_vid = vid[:8] + '...' + vid[-4:] if len(vid) > 14 else vid
+
+        lines.append(
+            '[color=8899bb]' + t + '[/color]  ' + status + '\n'
+            '[color=aabbdd]video: ' + short_vid + '[/color]\n'
+            '[color=ffffff]' + txt + '[/color]\n'
+        )
+
+    return '\n'.join(lines)
+
+
+def get_stats():
+    h = load_history()
+    total = len(h)
+    ok_count = sum(1 for x in h if x.get('ok'))
+    fail_count = total - ok_count
+    return total, ok_count, fail_count
+
+
+# ═══════════════════════════════════════
+#  COMMENT GENERATOR
+# ═══════════════════════════════════════
 
 EMOJIS = [
     '\U0001f525','\U0001f4af','\U0001f44d','\u2728','\U0001f4aa',
@@ -105,6 +198,10 @@ class CommentGen:
         return t[:i] + t[i] + t[i:] if t[i].isalpha() else t
 
 
+# ═══════════════════════════════════════
+#  TIKTOK API
+# ═══════════════════════════════════════
+
 class TikTok:
     UA = (
         'Mozilla/5.0 (Linux; Android 14; SM-S928B) '
@@ -123,8 +220,7 @@ class TikTok:
         self.sid = session_id.strip()
         self.s.cookies.set('sessionid', self.sid, domain='.tiktok.com', path='/')
         self.s.headers.update({
-            'User-Agent': self.UA,
-            'Accept': 'text/html',
+            'User-Agent': self.UA, 'Accept': 'text/html',
             'Accept-Language': 'en-US,en;q=0.9',
         })
         try:
@@ -141,7 +237,7 @@ class TikTok:
         except requests.exceptions.ConnectionError:
             return False, 'Net interneta'
         except requests.exceptions.Timeout:
-            return False, 'Timeout - medlenniy internet'
+            return False, 'Timeout'
         except Exception as e:
             return False, str(e)
 
@@ -261,10 +357,7 @@ class TikTok:
             self.s.headers['Referer'] = 'https://www.tiktok.com/video/' + video_id
             r = self.s.get(
                 'https://www.tiktok.com/api/comment/list/',
-                params={
-                    'aid': '1988', 'aweme_id': video_id,
-                    'count': '5', 'cursor': '0'
-                },
+                params={'aid': '1988', 'aweme_id': video_id, 'count': '5', 'cursor': '0'},
                 timeout=20,
             )
             cid = ''
@@ -286,8 +379,7 @@ class TikTok:
                 params={'aid': '1988'},
                 data={
                     'aweme_id': video_id, 'text': text,
-                    'reply_id': cid, 'text_extra': '[]',
-                    'is_self_see': '0',
+                    'reply_id': cid, 'text_extra': '[]', 'is_self_see': '0',
                 },
                 timeout=20,
             )
@@ -300,6 +392,10 @@ class TikTok:
         except Exception as e:
             return False, str(e)
 
+
+# ═══════════════════════════════════════
+#  UI
+# ═══════════════════════════════════════
 
 KV = '''
 #:import dp kivy.metrics.dp
@@ -361,6 +457,22 @@ KV = '''
             size: self.size
             radius: [dp(14)]
 
+<SmallButton@Button>:
+    font_size: sp(13)
+    size_hint_y: None
+    height: dp(44)
+    background_normal: ''
+    background_down: ''
+    color: 1, 1, 1, 1
+    bg_color: 0.14, 0.14, 0.21, 1
+    canvas.before:
+        Color:
+            rgba: self.bg_color
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12)]
+
 <SoftToggle@ToggleButton>:
     font_size: sp(13)
     background_normal: ''
@@ -401,6 +513,7 @@ KV = '''
 ScreenManager:
     id: sm
 
+    # ═══ LOGIN SCREEN ═══
     Screen:
         name: 'login'
         canvas.before:
@@ -413,7 +526,6 @@ ScreenManager:
         ScrollView:
             do_scroll_x: False
             bar_width: dp(0)
-
             BoxLayout:
                 orientation: 'vertical'
                 padding: dp(20), dp(16)
@@ -457,6 +569,12 @@ ScreenManager:
                     halign: 'center'
                     text_size: self.size
 
+                # History button
+                SmallButton:
+                    text: 'ISTORIYA KOMMENTARIEV'
+                    bg_color: 0.12, 0.15, 0.25, 1
+                    on_release: app.show_history()
+
                 Widget:
                     size_hint_y: None
                     height: dp(4)
@@ -465,7 +583,7 @@ ScreenManager:
                     size_hint_y: None
                     height: self.minimum_height
                     SectionLabel:
-                        text: 'СПОСОБ ВХОДА'
+                        text: 'SPOSOB VHODA'
                     BoxLayout:
                         size_hint_y: None
                         height: dp(42)
@@ -481,7 +599,6 @@ ScreenManager:
                             text: 'Email + Parol'
                             group: 'login'
                             on_state: app.switch_login('password')
-
                     BoxLayout:
                         id: cookie_box
                         orientation: 'vertical'
@@ -500,7 +617,6 @@ ScreenManager:
                         SoftInput:
                             id: inp_cookie
                             hint_text: 'Vstav sessionid'
-
                     BoxLayout:
                         id: pass_box
                         orientation: 'vertical'
@@ -531,7 +647,7 @@ ScreenManager:
                     SectionLabel:
                         text: 'KOMMENTARII'
                     Label:
-                        text: 'Bot chereiduet i delaet kazhdiy unikalnym'
+                        text: 'Bot chereiduet i delaet unikalnym'
                         font_size: sp(10)
                         color: 0.4, 0.4, 0.5, 0.6
                         size_hint_y: None
@@ -574,7 +690,6 @@ ScreenManager:
                             size_hint_x: 0.25
                             halign: 'center'
                             height: dp(42)
-
                     BoxLayout:
                         size_hint_y: None
                         height: dp(44)
@@ -597,7 +712,6 @@ ScreenManager:
                             text: '-'
                             color: 0.4, 0.4, 0.5, 1
                             size_hint_x: 0.05
-                            font_size: sp(14)
                         SoftInput:
                             id: inp_dmax
                             text: '25'
@@ -605,7 +719,6 @@ ScreenManager:
                             size_hint_x: 0.15
                             halign: 'center'
                             height: dp(42)
-
                     BoxLayout:
                         size_hint_y: None
                         height: dp(44)
@@ -622,7 +735,6 @@ ScreenManager:
                             size_hint_x: 0.3
 
                 GlowButton:
-                    id: btn_start
                     text: 'ZAPUSTIT'
                     on_release: app.start()
 
@@ -630,6 +742,7 @@ ScreenManager:
                     size_hint_y: None
                     height: dp(20)
 
+    # ═══ RUN SCREEN ═══
     Screen:
         name: 'run'
         canvas.before:
@@ -645,7 +758,7 @@ ScreenManager:
             BoxLayout:
                 size_hint_y: None
                 height: dp(56)
-                padding: dp(4), dp(4)
+                padding: dp(4)
                 spacing: dp(4)
                 canvas.before:
                     Color:
@@ -680,7 +793,6 @@ ScreenManager:
                 height: dp(80)
                 padding: dp(12), 0
                 spacing: dp(10)
-
                 StatCard:
                     bg: 0.1, 0.12, 0.2, 0.9
                     Label:
@@ -693,7 +805,6 @@ ScreenManager:
                         text: 'video'
                         font_size: sp(10)
                         color: 0.4, 0.45, 0.6, 0.7
-
                 StatCard:
                     bg: 0.08, 0.16, 0.12, 0.9
                     Label:
@@ -706,7 +817,6 @@ ScreenManager:
                         text: 'otpravleno'
                         font_size: sp(10)
                         color: 0.35, 0.5, 0.4, 0.7
-
                 StatCard:
                     bg: 0.18, 0.1, 0.1, 0.9
                     Label:
@@ -749,19 +859,156 @@ ScreenManager:
                 height: dp(62)
                 padding: dp(14), dp(8)
                 spacing: dp(10)
-
                 GlowButton:
                     id: bp
                     text: 'PAUZA'
                     bg_color: 0.65, 0.48, 0.12, 1
                     on_release: app.pause()
-
                 GlowButton:
                     text: 'STOP'
                     bg_color: 0.75, 0.22, 0.22, 1
                     on_release: app.stop()
+
+    # ═══ HISTORY SCREEN ═══
+    Screen:
+        name: 'history'
+        canvas.before:
+            Color:
+                rgba: 0.055, 0.055, 0.08, 1
+            Rectangle:
+                pos: self.pos
+                size: self.size
+
+        BoxLayout:
+            orientation: 'vertical'
+
+            # Header
+            BoxLayout:
+                size_hint_y: None
+                height: dp(56)
+                padding: dp(4)
+                spacing: dp(4)
+                canvas.before:
+                    Color:
+                        rgba: 0.08, 0.08, 0.12, 0.95
+                    Rectangle:
+                        pos: self.pos
+                        size: self.size
+                Button:
+                    text: '<'
+                    size_hint_x: None
+                    width: dp(48)
+                    font_size: sp(22)
+                    background_normal: ''
+                    background_color: 0, 0, 0, 0
+                    color: 0.7, 0.8, 1, 1
+                    on_release: app.close_history()
+                Label:
+                    text: 'Istoriya'
+                    font_size: sp(18)
+                    bold: True
+                    color: 0.93, 0.93, 0.97, 1
+                    halign: 'left'
+                    text_size: self.size
+                    valign: 'center'
+
+            Widget:
+                size_hint_y: None
+                height: dp(8)
+
+            # Total stats
+            BoxLayout:
+                size_hint_y: None
+                height: dp(70)
+                padding: dp(12), 0
+                spacing: dp(10)
+
+                StatCard:
+                    bg: 0.1, 0.12, 0.2, 0.9
+                    Label:
+                        id: hist_total
+                        text: str(app.hist_total)
+                        font_size: sp(24)
+                        bold: True
+                        color: 0.4, 0.65, 1, 1
+                    Label:
+                        text: 'vsego'
+                        font_size: sp(10)
+                        color: 0.4, 0.45, 0.6, 0.7
+
+                StatCard:
+                    bg: 0.08, 0.16, 0.12, 0.9
+                    Label:
+                        id: hist_ok
+                        text: str(app.hist_ok)
+                        font_size: sp(24)
+                        bold: True
+                        color: 0.35, 0.85, 0.5, 1
+                    Label:
+                        text: 'uspeshno'
+                        font_size: sp(10)
+                        color: 0.35, 0.5, 0.4, 0.7
+
+                StatCard:
+                    bg: 0.18, 0.1, 0.1, 0.9
+                    Label:
+                        id: hist_fail
+                        text: str(app.hist_fail)
+                        font_size: sp(24)
+                        bold: True
+                        color: 1, 0.45, 0.4, 1
+                    Label:
+                        text: 'oshibok'
+                        font_size: sp(10)
+                        color: 0.55, 0.35, 0.35, 0.7
+
+            Widget:
+                size_hint_y: None
+                height: dp(6)
+
+            # History list
+            SoftCard:
+                padding: dp(10)
+                ScrollView:
+                    id: hist_scroll
+                    do_scroll_x: False
+                    bar_width: dp(2)
+                    bar_color: 0.3, 0.5, 0.9, 0.3
+                    Label:
+                        id: hist_label
+                        text: app.history_text
+                        font_size: sp(11)
+                        color: 0.65, 0.67, 0.73, 1
+                        size_hint_y: None
+                        height: max(self.texture_size[1] + dp(20), hist_scroll.height)
+                        text_size: self.width - dp(16), None
+                        halign: 'left'
+                        valign: 'top'
+                        padding: dp(6), dp(4)
+                        markup: True
+
+            # Clear button
+            BoxLayout:
+                size_hint_y: None
+                height: dp(62)
+                padding: dp(14), dp(8)
+                spacing: dp(10)
+
+                GlowButton:
+                    text: 'OBNOVIT'
+                    bg_color: 0.2, 0.35, 0.7, 1
+                    on_release: app.refresh_history()
+
+                GlowButton:
+                    text: 'OCHISTIT'
+                    bg_color: 0.6, 0.18, 0.18, 1
+                    on_release: app.clear_history()
 '''
 
+
+# ═══════════════════════════════════════
+#  APP
+# ═══════════════════════════════════════
 
 class BotApp(App):
     status = StringProperty('Vvedi dannye i nazmi Zapustit')
@@ -770,6 +1017,11 @@ class BotApp(App):
     sv = NumericProperty(0)
     sc = NumericProperty(0)
     se = NumericProperty(0)
+
+    history_text = StringProperty('')
+    hist_total = NumericProperty(0)
+    hist_ok = NumericProperty(0)
+    hist_fail = NumericProperty(0)
 
     def build(self):
         self.title = 'TikTok Bot'
@@ -781,11 +1033,9 @@ class BotApp(App):
             return root
         except Exception as e:
             print('UI Error: ' + str(e))
-            return Builder.load_string('''
-BoxLayout:
-    Label:
-        text: 'UI Error: ''' + str(e).replace("'", "") + ''''
-''')
+            return Builder.load_string(
+                'BoxLayout:\n Label:\n  text: "UI Error"'
+            )
 
     def switch_login(self, mode):
         try:
@@ -800,10 +1050,44 @@ BoxLayout:
         except Exception:
             pass
 
+    # ── History ──
+
+    def show_history(self):
+        try:
+            self.refresh_history()
+            self.root.ids.sm.current = 'history'
+        except Exception:
+            pass
+
+    def close_history(self):
+        try:
+            self.root.ids.sm.current = 'login'
+        except Exception:
+            pass
+
+    def refresh_history(self):
+        try:
+            self.history_text = format_history()
+            t, o, f = get_stats()
+            self.hist_total = t
+            self.hist_ok = o
+            self.hist_fail = f
+        except Exception:
+            self.history_text = 'Oshibka zagruzki'
+
+    def clear_history(self):
+        try:
+            save_history([])
+            self.refresh_history()
+        except Exception:
+            pass
+
+    # ── Start/Stop ──
+
     def start(self):
         try:
             if requests is None:
-                self.status = 'Oshibka: net biblioteki requests'
+                self.status = 'Net biblioteki requests'
                 return
 
             ids = self.root.ids
@@ -814,7 +1098,7 @@ BoxLayout:
                 self.status = 'Vvedi poiskoviy zapros!'
                 return
             if not c1:
-                self.status = 'Vvedi hotya by 1 kommentariy!'
+                self.status = 'Vvedi hotya by 1 komment!'
                 return
 
             templates = [c1]
@@ -858,15 +1142,13 @@ BoxLayout:
             self.is_paused = False
             self.run_title = kw
 
-            # switch screen safely
-            Clock.schedule_once(lambda dt: self._switch_to_run(), 0.1)
-
+            Clock.schedule_once(lambda dt: self._go_run(), 0.1)
             threading.Thread(target=self._run_safe, args=(cfg,), daemon=True).start()
 
         except Exception as e:
             self.status = 'Oshibka: ' + str(e)
 
-    def _switch_to_run(self):
+    def _go_run(self):
         try:
             self.root.ids.sm.current = 'run'
         except Exception:
@@ -876,11 +1158,10 @@ BoxLayout:
         try:
             self._run(cfg)
         except Exception as e:
-            self._log('[color=ff6666]Kriticheskaya oshibka: ' + str(e) + '[/color]')
+            self._log('[color=ff6666]Crash: ' + str(e) + '[/color]')
             self.running = False
 
     def _run(self, cfg):
-        # check internet first
         self._log('[color=7799ff]Proveryayu internet...[/color]')
         try:
             requests.get('https://www.google.com', timeout=10)
@@ -889,7 +1170,7 @@ BoxLayout:
             return
 
         bot = TikTok()
-        self._log('[color=7799ff]Podklyuchayus...[/color]')
+        self._log('[color=7799ff]Vhozhu v akkaunt...[/color]')
 
         if cfg['mode'] == 'password':
             if not cfg['email'] or not cfg['password']:
@@ -905,14 +1186,14 @@ BoxLayout:
         if not ok:
             self._log('[color=ff6666]Oshibka vhoda: ' + str(msg) + '[/color]')
             return
-        self._log('[color=66dd88]Voshel kak @' + str(msg) + '[/color]\n')
+        self._log('[color=66dd88]Voshel: @' + str(msg) + '[/color]\n')
 
         self._log('[color=8899bb]Ishu video...[/color]')
         videos = bot.search(cfg['keyword'], cfg['count'])
         if not videos:
-            self._log('[color=ff6666]Video ne naydeny. Poprobuy drugoy zapros.[/color]')
+            self._log('[color=ff6666]Video ne naydeny[/color]')
             return
-        self._log('[color=66dd88]Naydeno: ' + str(len(videos)) + ' video[/color]\n')
+        self._log('[color=66dd88]Naydeno: ' + str(len(videos)) + '[/color]\n')
 
         gen = CommentGen(cfg['templates'])
 
@@ -925,7 +1206,10 @@ BoxLayout:
                 break
 
             text = gen.next()
-            self._log('[color=7799ff][' + str(i + 1) + '/' + str(len(videos)) + '][/color]  ' + text)
+            self._log(
+                '[color=7799ff][' + str(i + 1) + '/' +
+                str(len(videos)) + '][/color]  ' + text
+            )
 
             try:
                 if cfg['reply']:
@@ -935,6 +1219,9 @@ BoxLayout:
             except Exception as e:
                 ok = False
                 msg = str(e)
+
+            # save to history
+            add_to_history(vid, text, ok, '' if ok else msg)
 
             if ok:
                 self._upd('sc')
@@ -998,7 +1285,9 @@ BoxLayout:
     def go_back(self):
         self.running = False
         try:
-            Clock.schedule_once(lambda dt: setattr(self.root.ids.sm, 'current', 'login'), 0.1)
+            Clock.schedule_once(
+                lambda dt: setattr(self.root.ids.sm, 'current', 'login'), 0.1
+            )
         except Exception:
             pass
 
