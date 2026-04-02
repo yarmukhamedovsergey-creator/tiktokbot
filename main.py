@@ -1,5 +1,6 @@
 """
-TikTok Auto Commenter v3 — Android App
+TikTok Auto Commenter v3.1 — Android App
+Crash-proof edition
 """
 
 import os
@@ -11,27 +12,37 @@ import re
 import threading
 from urllib.parse import quote
 
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None
 
 from kivy.app import App
 from kivy.lang import Builder
 from kivy.clock import Clock
 from kivy.properties import StringProperty, NumericProperty
 from kivy.utils import platform
+from kivy.animation import Animation
+from kivy.metrics import dp, sp
+
+if platform != 'android':
+    from kivy.core.window import Window
+    Window.size = (400, 750)
 
 if platform == 'android':
     try:
         from android.permissions import request_permissions, Permission
         request_permissions([Permission.INTERNET])
-    except:
+    except Exception:
         pass
+
 
 EMOJIS = [
     '\U0001f525','\U0001f4af','\U0001f44d','\u2728','\U0001f4aa',
     '\U0001f64c','\u2764\ufe0f','\U0001f60a','\U0001f440','\U0001f3af',
     '\u2b50','\U0001f31f','\U0001f4ab','\U0001f389','\U0001f919',
     '\U0001f44f','\U0001f4a5','\U0001f680','\U0001f48e','\U0001f3c6',
-    '\U0001f60e','\U0001f91e','\u2705','\U0001f51d','\U0001fae1',
+    '\U0001f60e','\U0001f91e','\u2705','\U0001f51d',
     '\U0001f91d','\u26a1','\U0001f38a',
 ]
 INVISIBLE = ['\u200b','\u200c','\u200d','\ufeff','\u00ad','\u2060']
@@ -117,7 +128,7 @@ class TikTok:
             'Accept-Language': 'en-US,en;q=0.9',
         })
         try:
-            r = self.s.get('https://www.tiktok.com/', timeout=20)
+            r = self.s.get('https://www.tiktok.com/', timeout=30)
             self._tokens(r)
             m = re.search(r'"uniqueId":"([^"]+)"', r.text)
             if m:
@@ -126,7 +137,11 @@ class TikTok:
             if len(r.text) > 50000:
                 self.username = 'ok'
                 return True, self.username
-            return False, 'Cookie bad'
+            return False, 'Cookie nevalidn'
+        except requests.exceptions.ConnectionError:
+            return False, 'Net interneta'
+        except requests.exceptions.Timeout:
+            return False, 'Timeout - medlenniy internet'
         except Exception as e:
             return False, str(e)
 
@@ -146,13 +161,13 @@ class TikTok:
             'password': pwd, 'username': '', 'mobile': '',
         }
         self.s.headers.update({
-            'User-Agent': 'com.zhiliaoapp.musically/2023501030 (Linux; U; Android 14; en_US; SM-S928B) TTNet/3.1.0',
+            'User-Agent': 'com.zhiliaoapp.musically/2023501030 TTNet/3.1.0',
             'Content-Type': 'application/x-www-form-urlencoded',
         })
         try:
             r = self.s.post(
                 'https://api22-normal-c-useast2a.tiktokv.com/passport/user/login/',
-                params=params, data=data, timeout=20,
+                params=params, data=data, timeout=30,
             )
             j = r.json()
             if j.get('error_code', -1) == 0 or j.get('message') == 'success':
@@ -166,16 +181,21 @@ class TikTok:
                 self.s.headers['User-Agent'] = self.UA
                 return True, self.username
             msg = j.get('data', {}).get('description', j.get('message', '?'))
-            return False, msg
+            return False, str(msg)
+        except requests.exceptions.ConnectionError:
+            return False, 'Net interneta'
         except Exception as e:
             return False, str(e)
 
     def _tokens(self, r):
-        for c in self.s.cookies:
-            if c.name == 'tt_csrf_token':
-                self.csrf = c.value
-            elif c.name == 'msToken':
-                self.ms = c.value
+        try:
+            for c in self.s.cookies:
+                if c.name == 'tt_csrf_token':
+                    self.csrf = c.value
+                elif c.name == 'msToken':
+                    self.ms = c.value
+        except Exception:
+            pass
 
     def search(self, keyword, count=30):
         ids = []
@@ -184,12 +204,12 @@ class TikTok:
             self.s.headers['Referer'] = 'https://www.tiktok.com/'
             r = self.s.get(
                 'https://www.tiktok.com/search/video?q=' + quote(keyword),
-                timeout=20,
+                timeout=30,
             )
             self._tokens(r)
             for m in re.finditer(r'(?:video/|"id":"|"aweme_id":")\s*(\d{15,25})', r.text):
                 ids.append(m.group(1))
-        except:
+        except Exception:
             pass
         seen = set()
         unique = []
@@ -203,7 +223,7 @@ class TikTok:
         try:
             self.s.headers['Accept'] = 'text/html'
             self.s.headers['Referer'] = 'https://www.tiktok.com/'
-            r = self.s.get('https://www.tiktok.com/video/' + video_id, timeout=15)
+            r = self.s.get('https://www.tiktok.com/video/' + video_id, timeout=20)
             self._tokens(r)
             time.sleep(random.uniform(0.5, 1.5))
             self.s.headers.update({
@@ -224,7 +244,7 @@ class TikTok:
                     'aweme_id': video_id, 'text': text,
                     'text_extra': '[]', 'is_self_see': '0',
                 },
-                timeout=15,
+                timeout=20,
             )
             if r.status_code == 200:
                 j = r.json()
@@ -241,8 +261,11 @@ class TikTok:
             self.s.headers['Referer'] = 'https://www.tiktok.com/video/' + video_id
             r = self.s.get(
                 'https://www.tiktok.com/api/comment/list/',
-                params={'aid': '1988', 'aweme_id': video_id, 'count': '5', 'cursor': '0'},
-                timeout=15,
+                params={
+                    'aid': '1988', 'aweme_id': video_id,
+                    'count': '5', 'cursor': '0'
+                },
+                timeout=20,
             )
             cid = ''
             if r.status_code == 200:
@@ -263,9 +286,10 @@ class TikTok:
                 params={'aid': '1988'},
                 data={
                     'aweme_id': video_id, 'text': text,
-                    'reply_id': cid, 'text_extra': '[]', 'is_self_see': '0',
+                    'reply_id': cid, 'text_extra': '[]',
+                    'is_self_see': '0',
                 },
-                timeout=15,
+                timeout=20,
             )
             if r.status_code == 200:
                 j = r.json()
@@ -280,6 +304,99 @@ class TikTok:
 KV = '''
 #:import dp kivy.metrics.dp
 #:import sp kivy.metrics.sp
+#:import Animation kivy.animation.Animation
+
+<SoftCard@BoxLayout>:
+    orientation: 'vertical'
+    padding: dp(16)
+    spacing: dp(8)
+    canvas.before:
+        Color:
+            rgba: 0.11, 0.11, 0.16, 0.95
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(16)]
+
+<SoftInput@TextInput>:
+    multiline: False
+    size_hint_y: None
+    height: dp(48)
+    font_size: sp(14)
+    background_normal: ''
+    background_active: ''
+    background_color: 0, 0, 0, 0
+    foreground_color: 0.93, 0.93, 0.96, 1
+    hint_text_color: 0.35, 0.35, 0.45, 1
+    cursor_color: 0.45, 0.65, 1, 1
+    padding: dp(16), dp(14), dp(16), dp(14)
+    canvas.before:
+        Color:
+            rgba: 0.14, 0.14, 0.21, 1
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12)]
+    canvas.after:
+        Color:
+            rgba: (0.35, 0.55, 0.95, 0.6) if self.focus else (0.2, 0.2, 0.3, 0.4)
+        Line:
+            rounded_rectangle: [self.x, self.y, self.width, self.height, dp(12)]
+            width: dp(1.5) if self.focus else dp(1)
+
+<GlowButton@Button>:
+    font_size: sp(16)
+    bold: True
+    size_hint_y: None
+    height: dp(52)
+    background_normal: ''
+    background_down: ''
+    color: 1, 1, 1, 1
+    bg_color: 0.25, 0.5, 0.95, 1
+    canvas.before:
+        Color:
+            rgba: self.bg_color
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(14)]
+
+<SoftToggle@ToggleButton>:
+    font_size: sp(13)
+    background_normal: ''
+    background_down: ''
+    color: 1, 1, 1, 1
+    size_hint_y: None
+    height: dp(42)
+    canvas.before:
+        Color:
+            rgba: (0.25, 0.45, 0.85, 1) if self.state == 'down' else (0.14, 0.14, 0.21, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(11)]
+
+<StatCard@BoxLayout>:
+    orientation: 'vertical'
+    padding: dp(8)
+    bg: 0.11, 0.13, 0.19, 1
+    canvas.before:
+        Color:
+            rgba: self.bg
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(14)]
+
+<SectionLabel@Label>:
+    font_size: sp(11)
+    bold: True
+    size_hint_y: None
+    height: dp(28)
+    halign: 'left'
+    text_size: self.size
+    valign: 'center'
+    color: 0.45, 0.65, 1, 0.9
 
 ScreenManager:
     id: sm
@@ -288,443 +405,366 @@ ScreenManager:
         name: 'login'
         canvas.before:
             Color:
-                rgba: 0.06, 0.06, 0.09, 1
+                rgba: 0.055, 0.055, 0.08, 1
             Rectangle:
                 pos: self.pos
                 size: self.size
+
         ScrollView:
             do_scroll_x: False
+            bar_width: dp(0)
+
             BoxLayout:
                 orientation: 'vertical'
-                padding: dp(20)
-                spacing: dp(8)
+                padding: dp(20), dp(16)
+                spacing: dp(12)
                 size_hint_y: None
                 height: self.minimum_height
 
-                Label:
-                    text: 'TikTok Bot'
-                    font_size: sp(28)
-                    bold: True
+                Widget:
                     size_hint_y: None
-                    height: dp(50)
-                    color: 1,1,1,1
-
-                Label:
-                    text: app.status
-                    font_size: sp(13)
-                    size_hint_y: None
-                    height: dp(30)
-                    color: 0.5,0.8,1,1
-
-                Label:
-                    text: 'СПОСОБ ВХОДА'
-                    font_size: sp(12)
-                    color: 0.4,0.7,1,1
-                    size_hint_y: None
-                    height: dp(25)
-                    halign: 'left'
-                    text_size: self.size
-                    bold: True
+                    height: dp(10)
 
                 BoxLayout:
                     size_hint_y: None
-                    height: dp(42)
-                    spacing: dp(6)
-                    ToggleButton:
-                        id: btn_cookie
-                        text: 'Cookie'
-                        group: 'login'
-                        state: 'down'
-                        font_size: sp(13)
-                        background_normal: ''
-                        background_color: (0.2,0.4,0.8,1) if self.state=='down' else (0.15,0.15,0.22,1)
-                        on_state: app.switch_login('cookie')
-                    ToggleButton:
-                        id: btn_pass
-                        text: 'Email + Пароль'
-                        group: 'login'
-                        font_size: sp(13)
-                        background_normal: ''
-                        background_color: (0.2,0.4,0.8,1) if self.state=='down' else (0.15,0.15,0.22,1)
-                        on_state: app.switch_login('password')
-
-                BoxLayout:
-                    id: cookie_box
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: dp(100)
-                    spacing: dp(4)
+                    height: dp(60)
+                    spacing: dp(10)
+                    padding: dp(4)
                     Label:
-                        text: 'Chrome > tiktok.com > войди > адресная строка:\\njavascript:prompt("c",document.cookie)\\nнайди sessionid=XXX скопируй XXX'
-                        font_size: sp(9)
-                        color: 0.4,0.4,0.5,1
-                        size_hint_y: None
-                        height: dp(45)
+                        text: 'TikTok'
+                        font_size: sp(30)
+                        bold: True
+                        color: 0.95, 0.95, 0.98, 1
+                        halign: 'right'
+                        text_size: self.size
+                        valign: 'center'
+                    Label:
+                        text: 'Bot'
+                        font_size: sp(30)
+                        bold: True
+                        color: 0.35, 0.6, 1, 1
                         halign: 'left'
                         text_size: self.size
-                    TextInput:
-                        id: inp_cookie
-                        hint_text: 'Вставь sessionid'
-                        multiline: False
-                        size_hint_y: None
-                        height: dp(44)
-                        font_size: sp(14)
-                        background_color: 0.15,0.15,0.22,1
-                        foreground_color: 1,1,1,1
-                        hint_text_color: 0.4,0.4,0.5,1
-                        cursor_color: 0.4,0.7,1,1
-                        padding: dp(12), dp(10)
-
-                BoxLayout:
-                    id: pass_box
-                    orientation: 'vertical'
-                    size_hint_y: None
-                    height: dp(0)
-                    opacity: 0
-                    spacing: dp(6)
-                    TextInput:
-                        id: inp_email
-                        hint_text: 'Email'
-                        multiline: False
-                        size_hint_y: None
-                        height: dp(44)
-                        font_size: sp(14)
-                        background_color: 0.15,0.15,0.22,1
-                        foreground_color: 1,1,1,1
-                        hint_text_color: 0.4,0.4,0.5,1
-                        padding: dp(12), dp(10)
-                    TextInput:
-                        id: inp_pass
-                        hint_text: 'Пароль'
-                        multiline: False
-                        password: True
-                        size_hint_y: None
-                        height: dp(44)
-                        font_size: sp(14)
-                        background_color: 0.15,0.15,0.22,1
-                        foreground_color: 1,1,1,1
-                        hint_text_color: 0.4,0.4,0.5,1
-                        padding: dp(12), dp(10)
+                        valign: 'center'
 
                 Label:
-                    text: 'ПОИСК'
+                    id: status_label
+                    text: app.status
                     font_size: sp(12)
-                    color: 0.4,0.7,1,1
                     size_hint_y: None
-                    height: dp(25)
-                    halign: 'left'
+                    height: dp(24)
+                    color: 0.5, 0.7, 0.9, 0.8
+                    halign: 'center'
                     text_size: self.size
-                    bold: True
 
-                TextInput:
-                    id: inp_keyword
-                    hint_text: 'Что искать'
-                    multiline: False
+                Widget:
                     size_hint_y: None
-                    height: dp(44)
-                    font_size: sp(14)
-                    background_color: 0.15,0.15,0.22,1
-                    foreground_color: 1,1,1,1
-                    hint_text_color: 0.4,0.4,0.5,1
-                    padding: dp(12), dp(10)
+                    height: dp(4)
 
-                Label:
-                    text: 'КОММЕНТАРИИ'
-                    font_size: sp(12)
-                    color: 0.4,0.7,1,1
+                SoftCard:
                     size_hint_y: None
-                    height: dp(25)
-                    halign: 'left'
-                    text_size: self.size
-                    bold: True
+                    height: self.minimum_height
+                    SectionLabel:
+                        text: 'СПОСОБ ВХОДА'
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(42)
+                        spacing: dp(8)
+                        SoftToggle:
+                            id: btn_cookie
+                            text: 'Cookie'
+                            group: 'login'
+                            state: 'down'
+                            on_state: app.switch_login('cookie')
+                        SoftToggle:
+                            id: btn_pass
+                            text: 'Email + Parol'
+                            group: 'login'
+                            on_state: app.switch_login('password')
 
-                TextInput:
-                    id: inp_c1
-                    hint_text: 'Вариант 1 (обязательно)'
-                    multiline: False
-                    size_hint_y: None
-                    height: dp(42)
-                    font_size: sp(14)
-                    background_color: 0.15,0.15,0.22,1
-                    foreground_color: 1,1,1,1
-                    hint_text_color: 0.4,0.4,0.5,1
-                    padding: dp(12), dp(10)
+                    BoxLayout:
+                        id: cookie_box
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: dp(95)
+                        opacity: 1
+                        spacing: dp(6)
+                        Label:
+                            text: 'Chrome > tiktok.com > vojdi >\\njavascript:prompt("c",document.cookie)\\nsessionid=XXX kopiruesh XXX'
+                            font_size: sp(9)
+                            color: 0.4, 0.4, 0.5, 0.7
+                            size_hint_y: None
+                            height: dp(40)
+                            halign: 'left'
+                            text_size: self.size
+                        SoftInput:
+                            id: inp_cookie
+                            hint_text: 'Vstav sessionid'
 
-                TextInput:
-                    id: inp_c2
-                    hint_text: 'Вариант 2'
-                    multiline: False
-                    size_hint_y: None
-                    height: dp(42)
-                    font_size: sp(14)
-                    background_color: 0.15,0.15,0.22,1
-                    foreground_color: 1,1,1,1
-                    hint_text_color: 0.4,0.4,0.5,1
-                    padding: dp(12), dp(10)
+                    BoxLayout:
+                        id: pass_box
+                        orientation: 'vertical'
+                        size_hint_y: None
+                        height: dp(0)
+                        opacity: 0
+                        spacing: dp(6)
+                        SoftInput:
+                            id: inp_email
+                            hint_text: 'Email'
+                        SoftInput:
+                            id: inp_pass
+                            hint_text: 'Parol'
+                            password: True
 
-                TextInput:
-                    id: inp_c3
-                    hint_text: 'Вариант 3'
-                    multiline: False
+                SoftCard:
                     size_hint_y: None
-                    height: dp(42)
-                    font_size: sp(14)
-                    background_color: 0.15,0.15,0.22,1
-                    foreground_color: 1,1,1,1
-                    hint_text_color: 0.4,0.4,0.5,1
-                    padding: dp(12), dp(10)
+                    height: self.minimum_height
+                    SectionLabel:
+                        text: 'POISKOVIY ZAPROS'
+                    SoftInput:
+                        id: inp_keyword
+                        hint_text: 'Naprimer: tg yuzy'
 
-                TextInput:
-                    id: inp_c4
-                    hint_text: 'Вариант 4'
-                    multiline: False
+                SoftCard:
                     size_hint_y: None
-                    height: dp(42)
-                    font_size: sp(14)
-                    background_color: 0.15,0.15,0.22,1
-                    foreground_color: 1,1,1,1
-                    hint_text_color: 0.4,0.4,0.5,1
-                    padding: dp(12), dp(10)
-
-                Label:
-                    text: 'НАСТРОЙКИ'
-                    font_size: sp(12)
-                    color: 0.4,0.7,1,1
-                    size_hint_y: None
-                    height: dp(25)
-                    halign: 'left'
-                    text_size: self.size
-                    bold: True
-
-                BoxLayout:
-                    size_hint_y: None
-                    height: dp(42)
-                    spacing: dp(8)
+                    height: self.minimum_height
+                    SectionLabel:
+                        text: 'KOMMENTARII'
                     Label:
-                        text: 'Видео:'
-                        color: 0.7,0.7,0.8,1
-                        font_size: sp(14)
-                    TextInput:
-                        id: inp_count
-                        text: '30'
-                        multiline: False
-                        input_filter: 'int'
-                        size_hint_x: 0.3
-                        font_size: sp(15)
-                        background_color: 0.15,0.15,0.22,1
-                        foreground_color: 1,1,1,1
-                        padding: dp(10), dp(10)
-                        halign: 'center'
+                        text: 'Bot chereiduet i delaet kazhdiy unikalnym'
+                        font_size: sp(10)
+                        color: 0.4, 0.4, 0.5, 0.6
+                        size_hint_y: None
+                        height: dp(18)
+                        halign: 'left'
+                        text_size: self.size
+                    SoftInput:
+                        id: inp_c1
+                        hint_text: 'Variant 1 (obyazatelno)'
+                    SoftInput:
+                        id: inp_c2
+                        hint_text: 'Variant 2'
+                    SoftInput:
+                        id: inp_c3
+                        hint_text: 'Variant 3'
+                    SoftInput:
+                        id: inp_c4
+                        hint_text: 'Variant 4'
 
-                BoxLayout:
+                SoftCard:
                     size_hint_y: None
-                    height: dp(42)
-                    spacing: dp(8)
-                    Label:
-                        text: 'Пауза сек:'
-                        color: 0.7,0.7,0.8,1
-                        font_size: sp(14)
-                    TextInput:
-                        id: inp_dmin
-                        text: '10'
-                        multiline: False
-                        input_filter: 'int'
-                        size_hint_x: 0.15
-                        font_size: sp(15)
-                        background_color: 0.15,0.15,0.22,1
-                        foreground_color: 1,1,1,1
-                        padding: dp(10), dp(10)
-                        halign: 'center'
-                    Label:
-                        text: '-'
-                        color: 0.5,0.5,0.6,1
-                        size_hint_x: 0.05
-                    TextInput:
-                        id: inp_dmax
-                        text: '25'
-                        multiline: False
-                        input_filter: 'int'
-                        size_hint_x: 0.15
-                        font_size: sp(15)
-                        background_color: 0.15,0.15,0.22,1
-                        foreground_color: 1,1,1,1
-                        padding: dp(10), dp(10)
-                        halign: 'center'
+                    height: self.minimum_height
+                    SectionLabel:
+                        text: 'NASTROYKI'
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(44)
+                        spacing: dp(10)
+                        Label:
+                            text: 'Kol-vo video'
+                            color: 0.7, 0.7, 0.78, 1
+                            font_size: sp(13)
+                            halign: 'left'
+                            text_size: self.size
+                            valign: 'center'
+                        SoftInput:
+                            id: inp_count
+                            text: '30'
+                            input_filter: 'int'
+                            size_hint_x: 0.25
+                            halign: 'center'
+                            height: dp(42)
 
-                BoxLayout:
-                    size_hint_y: None
-                    height: dp(42)
-                    Label:
-                        text: 'Ответы на комменты:'
-                        color: 0.7,0.7,0.8,1
-                        font_size: sp(14)
-                    Switch:
-                        id: sw_reply
-                        active: False
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(44)
+                        spacing: dp(8)
+                        Label:
+                            text: 'Pauza (sek)'
+                            color: 0.7, 0.7, 0.78, 1
+                            font_size: sp(13)
+                            halign: 'left'
+                            text_size: self.size
+                            valign: 'center'
+                        SoftInput:
+                            id: inp_dmin
+                            text: '10'
+                            input_filter: 'int'
+                            size_hint_x: 0.15
+                            halign: 'center'
+                            height: dp(42)
+                        Label:
+                            text: '-'
+                            color: 0.4, 0.4, 0.5, 1
+                            size_hint_x: 0.05
+                            font_size: sp(14)
+                        SoftInput:
+                            id: inp_dmax
+                            text: '25'
+                            input_filter: 'int'
+                            size_hint_x: 0.15
+                            halign: 'center'
+                            height: dp(42)
 
-                Button:
-                    text: 'ЗАПУСТИТЬ'
-                    font_size: sp(18)
-                    bold: True
-                    size_hint_y: None
-                    height: dp(54)
-                    background_normal: ''
-                    background_color: 0.15,0.45,1,1
+                    BoxLayout:
+                        size_hint_y: None
+                        height: dp(44)
+                        Label:
+                            text: 'Otvety na kommenty'
+                            color: 0.7, 0.7, 0.78, 1
+                            font_size: sp(13)
+                            halign: 'left'
+                            text_size: self.size
+                            valign: 'center'
+                        Switch:
+                            id: sw_reply
+                            active: False
+                            size_hint_x: 0.3
+
+                GlowButton:
+                    id: btn_start
+                    text: 'ZAPUSTIT'
                     on_release: app.start()
 
                 Widget:
                     size_hint_y: None
-                    height: dp(30)
+                    height: dp(20)
 
     Screen:
         name: 'run'
         canvas.before:
             Color:
-                rgba: 0.06, 0.06, 0.09, 1
+                rgba: 0.055, 0.055, 0.08, 1
             Rectangle:
                 pos: self.pos
                 size: self.size
+
         BoxLayout:
             orientation: 'vertical'
 
             BoxLayout:
                 size_hint_y: None
-                height: dp(50)
-                padding: dp(6)
+                height: dp(56)
+                padding: dp(4), dp(4)
+                spacing: dp(4)
                 canvas.before:
                     Color:
-                        rgba: 0.1,0.1,0.15,1
+                        rgba: 0.08, 0.08, 0.12, 0.95
                     Rectangle:
                         pos: self.pos
                         size: self.size
                 Button:
                     text: '<'
                     size_hint_x: None
-                    width: dp(44)
-                    font_size: sp(20)
+                    width: dp(48)
+                    font_size: sp(22)
                     background_normal: ''
-                    background_color: 0,0,0,0
-                    color: 1,1,1,1
+                    background_color: 0, 0, 0, 0
+                    color: 0.7, 0.8, 1, 1
                     on_release: app.go_back()
                 Label:
                     text: app.run_title
-                    font_size: sp(16)
+                    font_size: sp(17)
                     bold: True
-                    color: 1,1,1,1
+                    color: 0.93, 0.93, 0.97, 1
                     halign: 'left'
                     text_size: self.size
                     valign: 'center'
 
+            Widget:
+                size_hint_y: None
+                height: dp(8)
+
             BoxLayout:
                 size_hint_y: None
-                height: dp(68)
-                padding: dp(6)
-                spacing: dp(6)
+                height: dp(80)
+                padding: dp(12), 0
+                spacing: dp(10)
 
-                BoxLayout:
-                    orientation: 'vertical'
-                    canvas.before:
-                        Color:
-                            rgba: 0.1,0.12,0.18,1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [dp(8)]
+                StatCard:
+                    bg: 0.1, 0.12, 0.2, 0.9
                     Label:
+                        id: anim_sv
                         text: str(app.sv)
-                        font_size: sp(22)
+                        font_size: sp(28)
                         bold: True
-                        color: 0.4,0.7,1,1
+                        color: 0.4, 0.65, 1, 1
                     Label:
-                        text: 'видео'
+                        text: 'video'
                         font_size: sp(10)
-                        color: 0.5,0.5,0.6,1
+                        color: 0.4, 0.45, 0.6, 0.7
 
-                BoxLayout:
-                    orientation: 'vertical'
-                    canvas.before:
-                        Color:
-                            rgba: 0.1,0.15,0.12,1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [dp(8)]
+                StatCard:
+                    bg: 0.08, 0.16, 0.12, 0.9
                     Label:
+                        id: anim_sc
                         text: str(app.sc)
-                        font_size: sp(22)
+                        font_size: sp(28)
                         bold: True
-                        color: 0.3,0.9,0.4,1
+                        color: 0.35, 0.85, 0.5, 1
                     Label:
-                        text: 'отправлено'
+                        text: 'otpravleno'
                         font_size: sp(10)
-                        color: 0.5,0.5,0.6,1
+                        color: 0.35, 0.5, 0.4, 0.7
 
-                BoxLayout:
-                    orientation: 'vertical'
-                    canvas.before:
-                        Color:
-                            rgba: 0.15,0.1,0.1,1
-                        RoundedRectangle:
-                            pos: self.pos
-                            size: self.size
-                            radius: [dp(8)]
+                StatCard:
+                    bg: 0.18, 0.1, 0.1, 0.9
                     Label:
+                        id: anim_se
                         text: str(app.se)
-                        font_size: sp(22)
+                        font_size: sp(28)
                         bold: True
-                        color: 1,0.4,0.3,1
+                        color: 1, 0.45, 0.4, 1
                     Label:
-                        text: 'ошибки'
+                        text: 'oshibki'
                         font_size: sp(10)
-                        color: 0.5,0.5,0.6,1
+                        color: 0.55, 0.35, 0.35, 0.7
 
-            ScrollView:
-                id: lscr
-                do_scroll_x: False
-                Label:
-                    id: lbl
-                    text: app.log
-                    font_size: sp(11)
-                    color: 0.7,0.7,0.75,1
-                    size_hint_y: None
-                    height: max(self.texture_size[1] + dp(20), lscr.height)
-                    text_size: self.width - dp(20), None
-                    halign: 'left'
-                    valign: 'top'
-                    padding: dp(10), dp(6)
-                    markup: True
+            Widget:
+                size_hint_y: None
+                height: dp(6)
+
+            SoftCard:
+                padding: dp(10)
+                ScrollView:
+                    id: lscr
+                    do_scroll_x: False
+                    bar_width: dp(2)
+                    bar_color: 0.3, 0.5, 0.9, 0.3
+                    Label:
+                        id: lbl
+                        text: app.log
+                        font_size: sp(11)
+                        color: 0.65, 0.67, 0.73, 1
+                        size_hint_y: None
+                        height: max(self.texture_size[1] + dp(20), lscr.height)
+                        text_size: self.width - dp(16), None
+                        halign: 'left'
+                        valign: 'top'
+                        padding: dp(6), dp(4)
+                        markup: True
 
             BoxLayout:
                 size_hint_y: None
-                height: dp(52)
-                padding: dp(8)
-                spacing: dp(8)
-                canvas.before:
-                    Color:
-                        rgba: 0.1,0.1,0.15,1
-                    Rectangle:
-                        pos: self.pos
-                        size: self.size
-                Button:
+                height: dp(62)
+                padding: dp(14), dp(8)
+                spacing: dp(10)
+
+                GlowButton:
                     id: bp
-                    text: 'ПАУЗА'
-                    font_size: sp(14)
-                    bold: True
-                    background_normal: ''
-                    background_color: 0.75,0.55,0.1,1
+                    text: 'PAUZA'
+                    bg_color: 0.65, 0.48, 0.12, 1
                     on_release: app.pause()
-                Button:
-                    text: 'СТОП'
-                    font_size: sp(14)
-                    bold: True
-                    background_normal: ''
-                    background_color: 0.85,0.2,0.2,1
+
+                GlowButton:
+                    text: 'STOP'
+                    bg_color: 0.75, 0.22, 0.22, 1
                     on_release: app.stop()
 '''
 
 
 class BotApp(App):
-    status = StringProperty('Введи данные и жми Запустить')
+    status = StringProperty('Vvedi dannye i nazmi Zapustit')
     log = StringProperty('')
     run_title = StringProperty('')
     sv = NumericProperty(0)
@@ -736,99 +776,143 @@ class BotApp(App):
         self.running = False
         self.is_paused = False
         self.login_mode = 'cookie'
-        return Builder.load_string(KV)
+        try:
+            root = Builder.load_string(KV)
+            return root
+        except Exception as e:
+            print('UI Error: ' + str(e))
+            return Builder.load_string('''
+BoxLayout:
+    Label:
+        text: 'UI Error: ''' + str(e).replace("'", "") + ''''
+''')
 
     def switch_login(self, mode):
-        self.login_mode = mode
-        ids = self.root.ids
-        if mode == 'cookie':
-            ids.cookie_box.height = 100
-            ids.cookie_box.opacity = 1
-            ids.pass_box.height = 0
-            ids.pass_box.opacity = 0
-        else:
-            ids.cookie_box.height = 0
-            ids.cookie_box.opacity = 0
-            ids.pass_box.height = 100
-            ids.pass_box.opacity = 1
+        try:
+            self.login_mode = mode
+            ids = self.root.ids
+            if mode == 'cookie':
+                Animation(height=dp(95), opacity=1, d=0.3).start(ids.cookie_box)
+                Animation(height=0, opacity=0, d=0.3).start(ids.pass_box)
+            else:
+                Animation(height=0, opacity=0, d=0.3).start(ids.cookie_box)
+                Animation(height=dp(110), opacity=1, d=0.3).start(ids.pass_box)
+        except Exception:
+            pass
 
     def start(self):
-        ids = self.root.ids
-        kw = ids.inp_keyword.text.strip()
-        c1 = ids.inp_c1.text.strip()
-        if not kw:
-            self.status = 'Введи поисковый запрос'
-            return
-        if not c1:
-            self.status = 'Введи хотя бы 1 комментарий'
-            return
-
-        templates = [c1]
-        for f in [ids.inp_c2, ids.inp_c3, ids.inp_c4]:
-            t = f.text.strip()
-            if t:
-                templates.append(t)
-
         try:
-            count = int(ids.inp_count.text)
-        except:
-            count = 30
-        try:
-            dmin = int(ids.inp_dmin.text)
-        except:
-            dmin = 10
-        try:
-            dmax = int(ids.inp_dmax.text)
-        except:
-            dmax = 25
-        dmax = max(dmax, dmin + 2)
+            if requests is None:
+                self.status = 'Oshibka: net biblioteki requests'
+                return
 
-        cfg = {
-            'mode': self.login_mode,
-            'cookie': ids.inp_cookie.text.strip(),
-            'email': ids.inp_email.text.strip(),
-            'password': ids.inp_pass.text.strip(),
-            'keyword': kw,
-            'templates': templates,
-            'count': count,
-            'dmin': dmin,
-            'dmax': dmax,
-            'reply': ids.sw_reply.active,
-        }
+            ids = self.root.ids
+            kw = ids.inp_keyword.text.strip()
+            c1 = ids.inp_c1.text.strip()
 
-        self.sv = 0
-        self.sc = 0
-        self.se = 0
-        self.log = ''
-        self.running = True
-        self.is_paused = False
-        self.run_title = kw
-        self.root.ids.sm.current = 'run'
-        threading.Thread(target=self._run, args=(cfg,), daemon=True).start()
+            if not kw:
+                self.status = 'Vvedi poiskoviy zapros!'
+                return
+            if not c1:
+                self.status = 'Vvedi hotya by 1 kommentariy!'
+                return
+
+            templates = [c1]
+            for f in [ids.inp_c2, ids.inp_c3, ids.inp_c4]:
+                t = f.text.strip()
+                if t:
+                    templates.append(t)
+
+            try:
+                count = int(ids.inp_count.text)
+            except Exception:
+                count = 30
+            try:
+                dmin = int(ids.inp_dmin.text)
+            except Exception:
+                dmin = 10
+            try:
+                dmax = int(ids.inp_dmax.text)
+            except Exception:
+                dmax = 25
+            dmax = max(dmax, dmin + 2)
+
+            cfg = {
+                'mode': self.login_mode,
+                'cookie': ids.inp_cookie.text.strip(),
+                'email': ids.inp_email.text.strip(),
+                'password': ids.inp_pass.text.strip(),
+                'keyword': kw,
+                'templates': templates,
+                'count': count,
+                'dmin': dmin,
+                'dmax': dmax,
+                'reply': ids.sw_reply.active,
+            }
+
+            self.sv = 0
+            self.sc = 0
+            self.se = 0
+            self.log = ''
+            self.running = True
+            self.is_paused = False
+            self.run_title = kw
+
+            # switch screen safely
+            Clock.schedule_once(lambda dt: self._switch_to_run(), 0.1)
+
+            threading.Thread(target=self._run_safe, args=(cfg,), daemon=True).start()
+
+        except Exception as e:
+            self.status = 'Oshibka: ' + str(e)
+
+    def _switch_to_run(self):
+        try:
+            self.root.ids.sm.current = 'run'
+        except Exception:
+            pass
+
+    def _run_safe(self, cfg):
+        try:
+            self._run(cfg)
+        except Exception as e:
+            self._log('[color=ff6666]Kriticheskaya oshibka: ' + str(e) + '[/color]')
+            self.running = False
 
     def _run(self, cfg):
+        # check internet first
+        self._log('[color=7799ff]Proveryayu internet...[/color]')
+        try:
+            requests.get('https://www.google.com', timeout=10)
+        except Exception:
+            self._log('[color=ff6666]Net interneta![/color]')
+            return
+
         bot = TikTok()
-        self._log('[color=6699ff]Запуск...[/color]')
+        self._log('[color=7799ff]Podklyuchayus...[/color]')
 
         if cfg['mode'] == 'password':
+            if not cfg['email'] or not cfg['password']:
+                self._log('[color=ff6666]Vvedi email i parol![/color]')
+                return
             ok, msg = bot.login_password(cfg['email'], cfg['password'])
         else:
             if not cfg['cookie']:
-                self._log('[color=ff5555]Вставь cookie![/color]')
+                self._log('[color=ff6666]Vstav cookie![/color]')
                 return
             ok, msg = bot.login_cookie(cfg['cookie'])
 
         if not ok:
-            self._log('[color=ff5555]Ошибка входа: ' + str(msg) + '[/color]')
+            self._log('[color=ff6666]Oshibka vhoda: ' + str(msg) + '[/color]')
             return
-        self._log('[color=55ff55]Вошел как @' + str(msg) + '[/color]\n')
+        self._log('[color=66dd88]Voshel kak @' + str(msg) + '[/color]\n')
 
-        self._log('[color=aaaaaa]Ищу видео...[/color]')
+        self._log('[color=8899bb]Ishu video...[/color]')
         videos = bot.search(cfg['keyword'], cfg['count'])
         if not videos:
-            self._log('[color=ff5555]Видео не найдены[/color]')
+            self._log('[color=ff6666]Video ne naydeny. Poprobuy drugoy zapros.[/color]')
             return
-        self._log('[color=55ff55]Найдено: ' + str(len(videos)) + '[/color]\n')
+        self._log('[color=66dd88]Naydeno: ' + str(len(videos)) + ' video[/color]\n')
 
         gen = CommentGen(cfg['templates'])
 
@@ -841,63 +925,86 @@ class BotApp(App):
                 break
 
             text = gen.next()
-            self._log('[color=6699ff][' + str(i+1) + '/' + str(len(videos)) + '][/color] ' + text)
+            self._log('[color=7799ff][' + str(i + 1) + '/' + str(len(videos)) + '][/color]  ' + text)
 
-            if cfg['reply']:
-                ok, msg = bot.reply(vid, text)
-            else:
-                ok, msg = bot.comment(vid, text)
+            try:
+                if cfg['reply']:
+                    ok, msg = bot.reply(vid, text)
+                else:
+                    ok, msg = bot.comment(vid, text)
+            except Exception as e:
+                ok = False
+                msg = str(e)
 
             if ok:
                 self._upd('sc')
-                self._log('[color=55ff55]  OK[/color]')
+                self._log('[color=66dd88]   OK[/color]')
             else:
                 self._upd('se')
-                self._log('[color=ff5555]  ' + msg + '[/color]')
-                if 'login' in msg.lower() or 'session' in msg.lower():
-                    self._log('[color=ffaa00]Сессия истекла[/color]')
+                self._log('[color=ff6666]   ' + str(msg) + '[/color]')
+                if 'login' in str(msg).lower() or 'session' in str(msg).lower():
+                    self._log('[color=ffbb44]Sessiya istekla[/color]')
                     break
 
             self._upd('sv')
 
             if i < len(videos) - 1 and self.running:
                 w = random.uniform(cfg['dmin'], cfg['dmax'])
-                self._log('[color=aaaaaa]  ' + str(int(w)) + 'с...[/color]\n')
+                self._log('[color=8899bb]   ' + str(int(w)) + 's...[/color]\n')
                 time.sleep(w)
 
-        self._log('\n[color=6699ff]ГОТОВО[/color]')
+        self._log('\n[color=7799ff]Gotovo![/color]')
         self.running = False
 
     def _log(self, msg):
-        Clock.schedule_once(lambda dt: setattr(self, 'log', self.log + msg + '\n'))
-        Clock.schedule_once(lambda dt: self._scroll())
+        Clock.schedule_once(lambda dt: self._add_log(msg))
 
-    def _scroll(self):
+    def _add_log(self, msg):
+        try:
+            self.log += msg + '\n'
+            Clock.schedule_once(lambda dt: self._do_scroll(), 0.1)
+        except Exception:
+            pass
+
+    def _do_scroll(self):
         try:
             self.root.ids.lscr.scroll_y = 0
-        except:
+        except Exception:
             pass
 
     def _upd(self, attr):
         def do(dt):
-            setattr(self, attr, getattr(self, attr) + 1)
+            try:
+                setattr(self, attr, getattr(self, attr) + 1)
+            except Exception:
+                pass
         Clock.schedule_once(do)
 
     def stop(self):
         self.running = False
-        self._log('[color=ff5555]СТОП[/color]')
+        self._log('[color=ff6666]Ostanovleno[/color]')
 
     def pause(self):
         self.is_paused = not self.is_paused
         try:
-            self.root.ids.bp.text = 'ДАЛЬШЕ' if self.is_paused else 'ПАУЗА'
-        except:
+            self.root.ids.bp.text = 'DALSHE' if self.is_paused else 'PAUZA'
+        except Exception:
             pass
+        if self.is_paused:
+            self._log('[color=ffbb44]Pauza[/color]')
+        else:
+            self._log('[color=66dd88]Prodolzhayu[/color]')
 
     def go_back(self):
-        self.stop()
-        self.root.ids.sm.current = 'login'
+        self.running = False
+        try:
+            Clock.schedule_once(lambda dt: setattr(self.root.ids.sm, 'current', 'login'), 0.1)
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':
-    BotApp().run()
+    try:
+        BotApp().run()
+    except Exception as e:
+        print('FATAL: ' + str(e))
