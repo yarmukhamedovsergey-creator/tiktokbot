@@ -7,8 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: ubuntu-22.04
 
     steps:
     - uses: actions/checkout@v4
@@ -16,26 +15,26 @@ jobs:
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11'
+        python-version: '3.10'
 
     - name: Setup Java
       uses: actions/setup-java@v4
       with:
-        distribution: temurin
+        distribution: 'temurin'
         java-version: '17'
 
-    - name: Install deps
+    - name: Install dependencies
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y -qq build-essential git autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev unzip zip lld libltdl-dev automake
-        pip install buildozer cython
+        sudo apt-get update
+        sudo apt-get install -y build-essential git autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev unzip zip lld
+        pip install buildozer "Cython<3.0"
 
-    - name: Build
-      run: |
-        yes | buildozer android debug
+    - name: Build APK
+      run: buildozer android debug
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: tiktokbot-apk
         path: bin/*.apk
